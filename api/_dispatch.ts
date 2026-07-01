@@ -1,15 +1,14 @@
 /**
  * Shared dispatch helper for Vercel Functions.
  *
- * Vercel Functions (fluid) only matches single-segment paths with
- * catch-all patterns, so we generate one file per Express route.
- * Each generated file simply imports this helper and exports it as
- * the default handler.
+ * We use a single function file (api/index.ts) plus a rewrite in
+ * vercel.json that routes all /api/* paths to /api. Vercel preserves
+ * the original request path in the `x-vercel-path` header, so we
+ * restore it before forwarding to the Express app.
  *
- * The helper lazy-loads the Express app from `src/server/app.ts` and
- * forwards the incoming Vercel request to it. Vercel preserves the
- * original URL in `req.url`, so Express route matching works
- * transparently.
+ * The Express app is lazy-loaded via dynamic import() to keep the
+ * function's cold-start time minimal — heavy dependencies (firebase,
+ * web-push, @google/genai) are only loaded when needed.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
@@ -26,6 +25,21 @@ async function getApp() {
 
 export async function dispatch(req: VercelRequest, res: VercelResponse) {
   try {
+    // Restore the original URL that was rewritten by vercel.json
+    // (rewrites route /api/* to /api; the original path is preserved
+    // in the x-vercel-path header).
+    const originalPath =
+      (req.headers["x-vercel-path"] as string | undefined) ||
+      (req.headers["x-forwarded-path"] as string | undefined) ||
+      req.url;
+
+    if (originalPath && originalPath !== req.url) {
+      // Preserve query string if present in the rewritten URL
+      const qIndex = req.url?.indexOf("?");
+      const qs = qIndex !== undefined && qIndex >= 0 ? req.url!.substring(qIndex) : "";
+      req.url = originalPath + qs;
+    }
+
     const app = await getApp();
     return app(req as any, res as any);
   } catch (err: any) {
