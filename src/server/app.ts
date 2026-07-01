@@ -859,10 +859,11 @@ Tolong jawab pertanyaan ini dengan hikmah, berikan referensi spesifik dari Al-Qu
   });
 }
 
-// Local development entrypoint — only runs when invoked directly
-// via `node dist/server.cjs` or `tsx server.ts`. Vercel skips this
-// because it imports `getApp` from `api/[[...slug]].ts` instead.
-if (require.main === module || process.env.RUN_LOCAL_SERVER === "true") {
+// Local development entrypoint — only runs when explicitly requested
+// via RUN_LOCAL_SERVER=true env var. The `require.main === module`
+// check is intentionally NOT used because esbuild bundles everything
+// into one module on Vercel, making that check unreliable.
+if (process.env.RUN_LOCAL_SERVER === "true") {
   (async () => {
     const app = await getApp();
     const PORT = parseInt(process.env.PORT || "3000", 10);
