@@ -1,0 +1,10 @@
+{
+  "name": "Quran Saku",
+  "description": "Aplikasi Al-Qur'an dan Jadwal Sholat dengan UI premium, data terlengkap, dan pengingat harian.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

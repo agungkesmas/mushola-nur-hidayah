@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Quran Saku</string>
+    <string name="title_activity_main">Quran Saku</string>
+    <string name="package_name">com.ahlanhabib.quransaku</string>
+    <string name="custom_url_scheme">com.ahlanhabib.quransaku</string>
+</resources>
