@@ -3,11 +3,8 @@
  *
  * Uses a static import so esbuild bundles the entire Express app
  * (and its dependencies) into the function output at build time.
- * This avoids the "Cannot find module" runtime error that dynamic
- * imports with relative paths cause on Vercel.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-// Static import — resolved & bundled at build time by esbuild.
 import { getApp } from "../src/server/app";
 
 export async function dispatch(req: VercelRequest, res: VercelResponse) {
@@ -30,11 +27,12 @@ export async function dispatch(req: VercelRequest, res: VercelResponse) {
     const app = await getApp();
     return app(req as any, res as any);
   } catch (err: any) {
-    console.error("[api/dispatch] Handler error:", err);
+    console.error("[api/_dispatch] Handler error:", err);
     res.status(500).json({
       status: "error",
       message: err?.message || "Unknown error",
       stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+      code: err?.code,
       time: new Date().toISOString(),
     });
   }
