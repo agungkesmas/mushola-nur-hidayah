@@ -45,46 +45,78 @@ let vapidKeys: { publicKey: string; privateKey: string } | null = null;
 let db: any = null;
 
 async function setupSystem() {
+  // Firebase is optional. If the config file is missing or invalid,
+  // we silently fall back to local VAPID key generation. This makes
+  // the app safe to deploy on Vercel without Firebase credentials.
   try {
     if (fs.existsSync("firebase-applet-config.json")) {
       const config = JSON.parse(fs.readFileSync("firebase-applet-config.json", "utf8"));
-      const app = initializeApp(config);
-      db = getFirestore(app, config.firestoreDatabaseId);
-      console.log("Firebase initialized for server subscriptions");
-      
-      const vDoc = await getDoc(doc(db, "systemConfig", "vapidKeys"));
-      if (vDoc.exists()) {
-        vapidKeys = vDoc.data() as { publicKey: string; privateKey: string };
-        console.log("Loaded VAPID keys from Firestore");
+      // Only attempt Firebase init if the config has the required fields.
+      if (config && config.projectId && config.apiKey) {
+        const app = initializeApp(config);
+        db = getFirestore(app, config.firestoreDatabaseId);
+        console.log("[setupSystem] Firebase initialized for server subscriptions");
+
+        try {
+          const vDoc = await getDoc(doc(db, "systemConfig", "vapidKeys"));
+          if (vDoc.exists()) {
+            vapidKeys = vDoc.data() as { publicKey: string; privateKey: string };
+            console.log("[setupSystem] Loaded VAPID keys from Firestore");
+          } else {
+            vapidKeys = webpush.generateVAPIDKeys();
+            await setDoc(doc(db, "systemConfig", "vapidKeys"), vapidKeys);
+            console.log("[setupSystem] Generated and saved new VAPID keys to Firestore");
+          }
+        } catch (e) {
+          console.warn("[setupSystem] Firestore VAPID key lookup failed, using fallback:", (e as Error)?.message);
+        }
       } else {
-        vapidKeys = webpush.generateVAPIDKeys();
-        await setDoc(doc(db, "systemConfig", "vapidKeys"), vapidKeys);
-        console.log("Generated and saved new VAPID keys to Firestore");
+        console.warn("[setupSystem] firebase-applet-config.json missing required fields, skipping Firebase");
       }
     }
   } catch (e) {
-    console.error("Firebase init error:", e);
+    console.warn("[setupSystem] Firebase init skipped:", (e as Error)?.message);
   }
 
-  // Fallback if no firebase
+  // Fallback if no firebase / no VAPID keys loaded
   if (!vapidKeys) {
     try {
-      if (fs.existsSync("vapid.json")) {
+      // On Vercel serverless, the filesystem is read-only — we cannot
+      // persist vapid.json. Generate ephemeral keys instead.
+      if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+        vapidKeys = webpush.generateVAPIDKeys();
+        console.log("[setupSystem] Generated ephemeral VAPID keys (serverless)");
+      } else if (fs.existsSync("vapid.json")) {
         vapidKeys = JSON.parse(fs.readFileSync("vapid.json", "utf8"));
       } else {
         vapidKeys = webpush.generateVAPIDKeys();
-        fs.writeFileSync("vapid.json", JSON.stringify(vapidKeys));
+        try {
+          fs.writeFileSync("vapid.json", JSON.stringify(vapidKeys));
+        } catch (writeErr) {
+          console.warn("[setupSystem] Could not persist vapid.json:", (writeErr as Error)?.message);
+        }
       }
-    } catch(e) {
+    } catch (e) {
+      console.warn("[setupSystem] VAPID key generation fallback failed, generating in-memory:", (e as Error)?.message);
       vapidKeys = webpush.generateVAPIDKeys();
     }
   }
 
-  webpush.setVapidDetails(
-    "mailto:ahlanhabibana@gmail.com",
-    vapidKeys!.publicKey,
-    vapidKeys!.privateKey
-  );
+  // Configure web-push with the resolved VAPID keys
+  try {
+    const vapidSubject =
+      process.env.VAPID_SUBJECT ||
+      "mailto:agung.kesmas@gmail.com";
+    webpush.setVapidDetails(
+      vapidSubject,
+      vapidKeys!.publicKey,
+      vapidKeys!.privateKey
+    );
+  } catch (e) {
+    console.error("[setupSystem] webpush.setVapidDetails failed:", (e as Error)?.message);
+    // Don't rethrow — the app should still respond to API requests
+    // even if push notifications are unavailable.
+  }
 }
 
 // ============================================
@@ -170,6 +202,12 @@ function registerRoutes(app: express.Application) {
 
   // ---- WEB PUSH ENDPOINTS ----
   app.get("/api/push/public-key", (req, res) => {
+    if (!vapidKeys) {
+      return res.status(503).json({
+        status: "error",
+        message: "VAPID keys not yet initialised. Try again in a moment.",
+      });
+    }
     res.json({ publicKey: vapidKeys.publicKey });
   });
 

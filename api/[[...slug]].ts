@@ -13,13 +13,24 @@
  * Vercel preserves the full URL in `req.url` (e.g. `/api/health`), so
  * the Express routes registered with the `/api/...` prefix will match
  * directly without any URL rewriting.
+ *
+ * Errors during app initialisation are caught and returned as a JSON
+ * 500 response so the cause is visible in the Vercel dashboard.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getApp } from "../src/server/app";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const app = await getApp();
-  // Express apps are Node.js http.RequestListener-compatible — they
-  // accept (req, res) and emit the response themselves.
-  return app(req as any, res as any);
+  try {
+    const app = await getApp();
+    return app(req as any, res as any);
+  } catch (err: any) {
+    console.error("[api] Handler error:", err);
+    res.status(500).json({
+      status: "error",
+      message: err?.message || "Unknown error",
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+      time: new Date().toISOString(),
+    });
+  }
 }
