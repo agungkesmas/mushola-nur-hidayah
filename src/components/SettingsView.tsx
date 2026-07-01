@@ -806,7 +806,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         )}
 
-        {/* VIEW 4: SUPPORT / GIFT */}
+        {/* VIEW 4: SUPPORT / GIFT — Coming Soon (donation details hidden for now) */}
         {activeMenu === "support" && (
           <div className="flex flex-col gap-5">
             <div>
@@ -819,53 +819,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </p>
             </div>
 
-            <div className="mt-4 flex flex-col gap-6 border border-emerald-100/60 p-8 rounded-[32px] bg-gradient-to-br from-[#FDFBF7] to-emerald-50/40 shadow-sm relative overflow-hidden">
+            {/* Coming Soon placeholder — donation details will be re-enabled later */}
+            <div className="mt-4 flex flex-col items-center justify-center gap-4 border border-emerald-100/60 p-10 sm:p-14 rounded-[32px] bg-gradient-to-br from-[#FDFBF7] to-emerald-50/40 shadow-sm relative overflow-hidden text-center">
               <div className="absolute -top-16 -right-16 w-48 h-48 bg-emerald-50 rounded-full blur-3xl opacity-60"></div>
 
-              <div className="flex flex-col gap-1.5 text-center relative z-10">
-                <span className="text-[12px] font-extrabold tracking-widest text-[#0F4C3A] uppercase mb-2">
-                  Rekening Infaq Dakwah
-                </span>
-                <div className="flex items-center justify-center gap-3 my-2 mt-3">
-                  <div className="w-12 h-12 bg-[#0F4C3A] text-[#ECC17A] rounded-2xl flex items-center justify-center shadow-md border border-emerald-700">
-                    <Landmark className="w-6 h-6" strokeWidth={1.5} />
-                  </div>
-                  <span className="text-xl font-bold text-slate-800 tracking-tight">
-                    Bank BSI
-                  </span>
-                </div>
-                <span className="text-[32px] sm:text-[40px] font-serif font-bold tracking-wider text-slate-800 my-2">
-                  7335435332
-                </span>
-                <span className="text-sm font-bold text-[#0F4C3A] tracking-wide uppercase">
-                  A.N. Habib Ismail Al Qadri
-                </span>
+              <div className="w-16 h-16 rounded-3xl bg-[#0F4C3A]/10 flex items-center justify-center shadow-inner relative z-10">
+                <HeartHandshake className="w-8 h-8 text-[#0F4C3A]" strokeWidth={1.5} />
               </div>
 
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText("7335435332");
-                  addToast(
-                    "Berhasil Disalin",
-                    "Nomor rekening berhasil disalin ke clipboard.",
-                    "success",
-                  );
-                }}
-                className="w-full flex items-center justify-center gap-2 py-4 bg-white border border-emerald-200/60 text-[#0F4C3A] text-sm font-bold rounded-2xl shadow-sm hover:border-[#0F4C3A] hover:bg-emerald-50 active:scale-[0.98] transition-all cursor-pointer relative z-10"
-              >
-                <Copy className="w-5 h-5" />
-                Salin Nomor Rekening
-              </button>
-            </div>
+              <div className="relative z-10">
+                <span className="inline-block text-[11px] font-extrabold tracking-widest text-[#ECC17A] bg-[#0F4C3A] px-3 py-1 rounded-full uppercase mb-3">
+                  Coming Soon
+                </span>
+                <h4 className="font-serif font-bold text-[#0F4C3A] text-2xl mb-2">
+                  Segera Hadir
+                </h4>
+                <p className="text-[13px] text-slate-600 font-medium leading-relaxed max-w-sm mx-auto">
+                  Informasi rekening infaq dakwah sedang dipersiapkan dan akan
+                  diaktifkan kembali dalam waktu dekat. Mohon doanya agar
+                  kemudahan ini segera dapat dimanfaatkan jamaah.
+                </p>
+              </div>
 
-            <p className="text-[13px] text-center text-slate-500 font-medium px-4 leading-relaxed mt-4 italic">
-              "Perumpamaan orang yang menginfakkan hartanya di jalan Allah
-              seperti sebutir biji yang menumbuhkan tujuh tangkai, pada setiap
-              tangkai ada seratus biji..." <br />
-              <span className="font-bold text-[#0F4C3A] block mt-2 opacity-80">
-                (Al-Baqarah: 261)
-              </span>
-            </p>
+              <p className="text-[13px] text-center text-slate-500 font-medium px-4 leading-relaxed mt-2 italic relative z-10">
+                "Perumpamaan orang yang menginfakkan hartanya di jalan Allah
+                seperti sebutir biji yang menumbuhkan tujuh tangkai, pada setiap
+                tangkai ada seratus biji..." <br />
+                <span className="font-bold text-[#0F4C3A] block mt-2 opacity-80">
+                  (Al-Baqarah: 261)
+                </span>
+              </p>
+            </div>
           </div>
         )}
         {/* VIEW 5: ABOUT APPLICATION */}
