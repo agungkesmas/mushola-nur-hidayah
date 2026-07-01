@@ -1,27 +1,14 @@
 /**
  * Shared dispatch helper for Vercel Functions.
  *
- * We use a single function file (api/index.ts) plus a rewrite in
- * vercel.json that routes all /api/* paths to /api. Vercel preserves
- * the original request path in the `x-vercel-path` header, so we
- * restore it before forwarding to the Express app.
- *
- * The Express app is lazy-loaded via dynamic import() to keep the
- * function's cold-start time minimal — heavy dependencies (firebase,
- * web-push, @google/genai) are only loaded when needed.
+ * Uses a static import so esbuild bundles the entire Express app
+ * (and its dependencies) into the function output at build time.
+ * This avoids the "Cannot find module" runtime error that dynamic
+ * imports with relative paths cause on Vercel.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-
-let _appPromise: Promise<any> | null = null;
-
-async function getApp() {
-  if (!_appPromise) {
-    // IMPORTANT: do NOT include the .ts extension — Vercel compiles
-    // .ts → .js at build time and Node resolves the .js at runtime.
-    _appPromise = import("../src/server/app.js").then((m) => m.getApp());
-  }
-  return _appPromise;
-}
+// Static import — resolved & bundled at build time by esbuild.
+import { getApp } from "../src/server/app";
 
 export async function dispatch(req: VercelRequest, res: VercelResponse) {
   try {
