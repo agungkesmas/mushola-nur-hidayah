@@ -823,24 +823,61 @@ PENTING:
 - Di akhir array "content", SELALU letakkan block "doa" yang berisi doa merenung/intropeksi berbahasa Indonesia untuk menutup khutbah pertama sebelum duduk di antara dua khutbah.
 - Kembalikan HANYA JSON valid. Jangan gunakan markdown block (\`\`\`json).`;
 
-      const responseText = await callGroq(
-        [
-          {
-            role: "system",
-            content: "Anda adalah asisten AI yang ahli dalam penyusunan naskah Khutbah Jumat Islami. Selalu kembalikan output sebagai JSON valid sesuai struktur yang diminta, tanpa pembungkus markdown.",
-          },
-          { role: "user", content: promptText },
-        ],
-        {
-          apiKey: effectiveKey,
-          temperature: 0.7,
-          jsonMode: true,
-          maxTokens: 8000,
+      // Use llama-3.1-8b-instant for khutbah — it has higher TPM limit
+      // on Groq free tier than 70b, and is fast enough for this task.
+      // The 70b model can hit 12k TPM rate limit on long JSON output.
+      const GROQ_KHUTBAH_MODEL = process.env.GROQ_KHUTBAH_MODEL || "llama-3.1-8b-instant";
+
+      // Retry with backoff on rate-limit (429) errors
+      const maxRetries = 3;
+      let attempt = 0;
+      let responseText: string | null = null;
+      let lastError: any = null;
+
+      while (attempt < maxRetries) {
+        try {
+          responseText = await callGroq(
+            [
+              {
+                role: "system",
+                content: "Anda adalah asisten AI yang ahli dalam penyusunan naskah Khutbah Jumat Islami. Selalu kembalikan output sebagai JSON valid sesuai struktur yang diminta, tanpa pembungkus markdown.",
+              },
+              { role: "user", content: promptText },
+            ],
+            {
+              apiKey: effectiveKey,
+              model: GROQ_KHUTBAH_MODEL,
+              temperature: 0.7,
+              jsonMode: true,
+              maxTokens: 6000,
+            }
+          );
+          break;
+        } catch (err: any) {
+          lastError = err;
+          attempt++;
+          const msg = (err?.message || "").toLowerCase();
+          // Retry on rate-limit (429) — Groq returns 429 with
+          // 'rate limit' or 'tokens per minute' in the message
+          const isRateLimit = msg.includes("429") || msg.includes("rate limit") || msg.includes("tokens per minute");
+          if (isRateLimit && attempt < maxRetries) {
+            // Exponential backoff: 5s, 10s, 20s
+            const waitMs = 5000 * Math.pow(2, attempt - 1);
+            console.log(`[generate-khutbah] Rate limited. Retry ${attempt}/${maxRetries} in ${waitMs}ms...`);
+            await new Promise((r) => setTimeout(r, waitMs));
+          } else {
+            // Non-retryable error or out of retries
+            break;
+          }
         }
-      );
+      }
 
       if (!responseText) {
-        throw new Error("Empty response from Groq");
+        const msg = lastError?.message || "Gagal menghubungi layanan AI setelah beberapa percobaan.";
+        return res.status(500).json({
+          error: msg,
+          retryable: (lastError?.message || "").toLowerCase().includes("rate limit"),
+        });
       }
 
       let parsedKhutbah: any;
@@ -862,6 +899,7 @@ PENTING:
 
       parsedKhutbah.id = Date.now();
       parsedKhutbah.provider = "groq";
+      parsedKhutbah.model = GROQ_KHUTBAH_MODEL;
       res.json(parsedKhutbah);
     } catch (error: any) {
       console.error("[generate-khutbah] AI Error:", error);
