@@ -2,6 +2,7 @@
   "name": "mushola-nur-hidayah",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "description": "Mushola Nur Hidayah - Griya Lurah Asri. Aplikasi Al-Qur'an & ibadah untuk jamaah mushola.",
   "scripts": {
     "dev": "tsx server.ts",

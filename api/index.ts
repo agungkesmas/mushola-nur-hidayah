@@ -1,16 +1,39 @@
-/** Test: import getApp from src/server/app */
+/**
+ * Single Vercel Function entrypoint for the entire /api/* namespace.
+ *
+ * Vercel Hobby plan limits deployments to 12 serverless functions,
+ * so we consolidate all Express routes into a single function file
+ * and use `vercel.json` `rewrites` to route every /api/* path here.
+ *
+ * Vercel's rewrites preserve the original URL in `req.url` (and
+ * append the matched path as `?path=...`), so Express route matching
+ * works transparently — we just need to strip the appended query.
+ */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getApp } from "../src/server/app";
 
+// Pre-warm the app at module load so module-load errors surface as
+// FUNCTION_INVOCATION_FAILED (Vercel will retry, and you can see the
+// crash in the project's function logs). The promise is memoised so
+// subsequent invocations reuse it.
+const _appPromise = getApp().catch((err) => {
+  console.error("[api/index] Module-load getApp() failed:", err);
+  throw err;
+});
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
+    // Vercel's rewrite from /api/:path* to /api preserves the original
+    // URL in req.url but appends ?path=<captured> as an extra query
+    // parameter. Strip that extra param so Express sees clean URLs.
     if (req.url && req.url.includes("?path=")) {
       req.url = req.url.replace(/\?path=[^&]*/, "").replace(/\?$/, "");
     }
-    const app = await getApp();
+
+    const app = await _appPromise;
     return app(req as any, res as any);
   } catch (err: any) {
-    console.error("[handler] error:", err);
+    console.error("[api/index] Handler error:", err);
     res.status(500).json({
       status: "error",
       message: err?.message || "Unknown error",
