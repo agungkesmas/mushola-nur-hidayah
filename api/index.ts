@@ -1,44 +1,62 @@
 /**
- * Single Vercel Function entrypoint for the entire /api/* namespace.
+ * Single Vercel Function entrypoint — inlined Express app for testing.
  *
- * Vercel Hobby plan limits deployments to 12 serverless functions,
- * so we consolidate all Express routes into a single function file
- * and use `vercel.json` `rewrites` to route every /api/* path here.
- *
- * Vercel's rewrites preserve the original URL in `req.url` (and
- * append the matched path as `?path=...`), so Express route matching
- * works transparently — we just need to strip the appended query.
+ * All app code is inlined here to verify that the import path
+ * `../src/server/app` is the issue (vs the app code itself).
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getApp } from "../src/server/app";
+import express from "express";
+import path from "path";
+import { GoogleGenAI } from "@google/genai";
+import webpush from "web-push";
+import fs from "fs";
+import { createClient } from "@supabase/supabase-js";
 
-// Pre-warm the app at module load so module-load errors surface as
-// FUNCTION_INVOCATION_FAILED (Vercel will retry, and you can see the
-// crash in the project's function logs). The promise is memoised so
-// subsequent invocations reuse it.
-const _appPromise = getApp().catch((err) => {
-  console.error("[api/index] Module-load getApp() failed:", err);
-  throw err;
-});
+// Suppress unused warnings
+void path;
+void GoogleGenAI;
+void fs;
+void createClient;
+
+let _app: express.Application | null = null;
+
+async function getApp(): Promise<express.Application> {
+  if (_app) return _app;
+  console.log("[inline] Initialising express app");
+  const app = express();
+  app.use(express.json());
+  app.get("/api/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      time: new Date().toISOString(),
+      runtime: "vercel-inline",
+    });
+  });
+  app.get("/api/push/public-key", (_req, res) => {
+    try {
+      const keys = webpush.generateVAPIDKeys();
+      res.json({ publicKey: keys.publicKey });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+  _app = app;
+  console.log("[inline] Done");
+  return app;
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    // Vercel's rewrite from /api/:path* to /api preserves the original
-    // URL in req.url but appends ?path=<captured> as an extra query
-    // parameter. Strip that extra param so Express sees clean URLs.
     if (req.url && req.url.includes("?path=")) {
       req.url = req.url.replace(/\?path=[^&]*/, "").replace(/\?$/, "");
     }
-
-    const app = await _appPromise;
+    const app = await getApp();
     return app(req as any, res as any);
   } catch (err: any) {
-    console.error("[api/index] Handler error:", err);
+    console.error("[inline] Handler error:", err);
     res.status(500).json({
       status: "error",
       message: err?.message || "Unknown error",
-      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
-      code: err?.code,
       time: new Date().toISOString(),
     });
   }
