@@ -1,7 +1,9 @@
-/** Test: express + supabase */
+/** Test: express + supabase + web-push + @google/genai */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import express from "express";
 import { createClient } from "@supabase/supabase-js";
+import webpush from "web-push";
+import { GoogleGenAI } from "@google/genai";
 
 const app = express();
 app.use(express.json());
@@ -20,6 +22,24 @@ app.get("/api/supabase-test", async (_req, res) => {
     const sb = createClient(url, key, { auth: { persistSession: false } });
     const { data, error } = await sb.from("mosque_profile").select("*").limit(1);
     res.json({ status: "ok", data, error: error?.message });
+  } catch (e: any) {
+    res.status(500).json({ status: "error", message: e?.message });
+  }
+});
+
+app.get("/api/webpush-test", (_req, res) => {
+  try {
+    const keys = webpush.generateVAPIDKeys();
+    res.json({ status: "ok", publicKey: keys.publicKey.slice(0, 20) + "..." });
+  } catch (e: any) {
+    res.status(500).json({ status: "error", message: e?.message });
+  }
+});
+
+app.get("/api/genai-test", (_req, res) => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "test" });
+    res.json({ status: "ok", model: typeof ai.models });
   } catch (e: any) {
     res.status(500).json({ status: "error", message: e?.message });
   }
