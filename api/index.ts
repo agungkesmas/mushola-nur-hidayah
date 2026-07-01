@@ -792,41 +792,37 @@ function registerRoutes(app: express.Application) {
         });
       }
 
-      const promptText = `
-Anda adalah seorang ulama tingkat tinggi dan penulis naskah Khutbah Jumat profesional di Indonesia.
-Tugas Anda: Buatkan naskah Khutbah Jumat yang lengkap, mendalam, dan terstruktur sesuai sunnah dengan tema: "${tema}" ${judul ? `(Judul: ${judul})` : ''}.
-${tanyaUstadzContext ? `\nRiwayat percakapan jamaah sebelumnya mengenai topik ini:\n"${tanyaUstadzContext}"\nSilakan jadikan riwayat pertanyaan dan jawaban tersebut sebagai landasan cerita atau bahasan utama dalam isi khutbah Anda.\n` : ""}
-Pastikan panjangnya cukup untuk khutbah nyata (sekitar 10-15 menit dibaca). Gunakan bahasa Indonesia yang baku, menyentuh hati, namun tegas.
+      // Default: llama-3.3-70b-versatile has 12k TPM on Groq free tier,
+      // which is the highest among Groq's free-tier models. We keep the
+      // prompt compact (maxTokens=3500) to stay under the TPM limit.
+      const GROQ_KHUTBAH_MODEL = process.env.GROQ_KHUTBAH_MODEL || "llama-3.3-70b-versatile";
 
-Struktur Output JSON yang HARUS dikembalikan persis seperti ini:
+      // Compact prompt — same structure, less verbose instructions
+      const compactPrompt = `Anda adalah ulama & penulis Khutbah Jumat profesional. Buatkan naskah Khutbah Jumat lengkap & terstruktur dengan tema: "${tema}" ${judul ? `(Judul: ${judul})` : ''}.${tanyaUstadzContext ? `\nRiwayat tanya-jawab jamaah: "${tanyaUstadzContext}". Jadikan landasan isi khutbah.` : ""}
+
+Bahasa: Indonesia baku, menyentuh hati, ~10 menit baca.
+
+Kembalikan HANYA JSON valid dengan struktur:
 {
-  "title": "Judul Khutbah (Singkat dan Menarik)",
-  "author": "AI Ustadz / Nama Anda",
-  "tema": "Topik ringkas (Maksimal 2-3 kata)",
-  "ringkasan": "Satu kalimat ringkasan",
-  "muqaddimah": "الْحَمْدُ لِلَّهِ الَّذِي... (Teks Arab lengkap Muqaddimah: memuat Tahmid, Shalawat, Syahadat, dan Wasiat Takwa)",
+  "title": "Judul singkat",
+  "author": "AI Ustadz",
+  "tema": "Topik 2-3 kata",
+  "ringkasan": "Satu kalimat",
+  "muqaddimah": "Teks Arab Muqaddimah (Tahmid, Shalawat, Syahadat, Wasiat Takwa)",
   "content": [
-    // Array dari block konten. Kombinasikan "text" (paragraf narasi), "quran" (ayat), "hadith" (hadis), "points" (poin-poin pesan), dan selalu diakhiri dengan "doa" (doa bahasa Indonesia di akhir khutbah pertama).
+    {"type":"text","text":"paragraf narasi"},
+    {"type":"quran","arabic":"ayat arab","translation":"terjemahan","source":"QS. Nama:Ayat"},
+    {"type":"hadith","arabic":"hadits arab","translation":"terjemahan","source":"HR. Perawi"},
+    {"type":"points","intro":"intro","items":[{"title":"1. Poin","desc":"penjelasan"}]},
+    {"type":"doa","text":"Doa penutup bahasa Indonesia"}
   ],
-  "penutup": "بَارَكَ اللهُ لِيْ وَلَكُمْ فِي الْقُرْآنِ الْعَظِيْمِ... (Teks Arab lengkap Penutup / Khutbah Kedua)"
+  "penutup": "Teks Arab Penutup / Khutbah Kedua"
 }
 
-Untuk "content", struktur block yang diijinkan adalah:
-1. Text biasa: { "type": "text", "text": "Paragraf narasi khutbah yang mendalam..." }
-2. Kutipan Qur'an: { "type": "quran", "arabic": "tulisan arab ayat", "translation": "terjemahan", "source": "QS. Nama Surat: Ayat" }
-3. Kutipan Hadis: { "type": "hadith", "arabic": "tulisan arab hadis", "translation": "terjemahan", "source": "HR. Sesuatu" }
-4. Poin-poin/Penjelasan: { "type": "points", "intro": "Berikut adalah kiat-kiat:", "items": [ { "title": "1. Poin Satu", "desc": "Penjelasan" } ] }
-5. Doa Penutup Khutbah Pertama: { "type": "doa", "text": "Ya Allah, jadikanlah kami..." }
-
-PENTING:
-- Di dalam array "content", HARUS memuat minimal 2-3 dalil (Quran/Hadis).
-- Di akhir array "content", SELALU letakkan block "doa" yang berisi doa merenung/intropeksi berbahasa Indonesia untuk menutup khutbah pertama sebelum duduk di antara dua khutbah.
-- Kembalikan HANYA JSON valid. Jangan gunakan markdown block (\`\`\`json).`;
-
-      // Use llama-3.1-8b-instant for khutbah — it has higher TPM limit
-      // on Groq free tier than 70b, and is fast enough for this task.
-      // The 70b model can hit 12k TPM rate limit on long JSON output.
-      const GROQ_KHUTBAH_MODEL = process.env.GROQ_KHUTBAH_MODEL || "llama-3.1-8b-instant";
+Aturan:
+- content WAJIB minimal 2-3 dalil (Quran/Hadis)
+- content diakhiri block "doa"
+- Jangan markdown, hanya JSON`;
 
       // Retry with backoff on rate-limit (429) errors
       const maxRetries = 3;
@@ -840,16 +836,16 @@ PENTING:
             [
               {
                 role: "system",
-                content: "Anda adalah asisten AI yang ahli dalam penyusunan naskah Khutbah Jumat Islami. Selalu kembalikan output sebagai JSON valid sesuai struktur yang diminta, tanpa pembungkus markdown.",
+                content: "Anda ahli Khutbah Jumat Islami. Output WAJIB JSON valid tanpa markdown.",
               },
-              { role: "user", content: promptText },
+              { role: "user", content: compactPrompt },
             ],
             {
               apiKey: effectiveKey,
               model: GROQ_KHUTBAH_MODEL,
               temperature: 0.7,
               jsonMode: true,
-              maxTokens: 6000,
+              maxTokens: 3500,
             }
           );
           break;
@@ -857,16 +853,14 @@ PENTING:
           lastError = err;
           attempt++;
           const msg = (err?.message || "").toLowerCase();
-          // Retry on rate-limit (429) — Groq returns 429 with
-          // 'rate limit' or 'tokens per minute' in the message
-          const isRateLimit = msg.includes("429") || msg.includes("rate limit") || msg.includes("tokens per minute");
+          // Retry on rate-limit (429) or "request too large" (transient)
+          const isRateLimit = msg.includes("429") || msg.includes("rate limit") || msg.includes("tokens per minute") || msg.includes("request too large");
           if (isRateLimit && attempt < maxRetries) {
-            // Exponential backoff: 5s, 10s, 20s
-            const waitMs = 5000 * Math.pow(2, attempt - 1);
+            // Exponential backoff: 8s, 16s, 32s (Groq TPM window is 60s)
+            const waitMs = 8000 * Math.pow(2, attempt - 1);
             console.log(`[generate-khutbah] Rate limited. Retry ${attempt}/${maxRetries} in ${waitMs}ms...`);
             await new Promise((r) => setTimeout(r, waitMs));
           } else {
-            // Non-retryable error or out of retries
             break;
           }
         }
@@ -884,7 +878,6 @@ PENTING:
       try {
         parsedKhutbah = JSON.parse(responseText);
       } catch (err) {
-        // Try to extract JSON from possible markdown wrappers
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           try {
