@@ -1,57 +1,22 @@
-/** Test: express + supabase + web-push + @google/genai */
+/** Test: import getApp from src/server/app */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import express from "express";
-import { createClient } from "@supabase/supabase-js";
-import webpush from "web-push";
-import { GoogleGenAI } from "@google/genai";
-
-const app = express();
-app.use(express.json());
-
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
-});
-
-app.get("/api/supabase-test", async (_req, res) => {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-  if (!url || !key) {
-    return res.json({ status: "no-creds", url: !!url, key: !!key });
-  }
-  try {
-    const sb = createClient(url, key, { auth: { persistSession: false } });
-    const { data, error } = await sb.from("mosque_profile").select("*").limit(1);
-    res.json({ status: "ok", data, error: error?.message });
-  } catch (e: any) {
-    res.status(500).json({ status: "error", message: e?.message });
-  }
-});
-
-app.get("/api/webpush-test", (_req, res) => {
-  try {
-    const keys = webpush.generateVAPIDKeys();
-    res.json({ status: "ok", publicKey: keys.publicKey.slice(0, 20) + "..." });
-  } catch (e: any) {
-    res.status(500).json({ status: "error", message: e?.message });
-  }
-});
-
-app.get("/api/genai-test", (_req, res) => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "test" });
-    res.json({ status: "ok", model: typeof ai.models });
-  } catch (e: any) {
-    res.status(500).json({ status: "error", message: e?.message });
-  }
-});
-
-app.get("/api/*", (_req, res) => {
-  res.json({ status: "catch-all", url: _req.url, time: new Date().toISOString() });
-});
+import { getApp } from "../src/server/app";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.url && req.url.includes("?path=")) {
-    req.url = req.url.replace(/\?path=[^&]*/, "").replace(/\?$/, "");
+  try {
+    if (req.url && req.url.includes("?path=")) {
+      req.url = req.url.replace(/\?path=[^&]*/, "").replace(/\?$/, "");
+    }
+    const app = await getApp();
+    return app(req as any, res as any);
+  } catch (err: any) {
+    console.error("[handler] error:", err);
+    res.status(500).json({
+      status: "error",
+      message: err?.message || "Unknown error",
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined,
+      code: err?.code,
+      time: new Date().toISOString(),
+    });
   }
-  return app(req as any, res as any);
 }
