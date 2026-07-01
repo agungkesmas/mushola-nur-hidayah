@@ -1,19 +1,74 @@
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
-import { GoogleGenAI } from "@google/genai";
 import webpush from "web-push";
 import fs from "fs";
 
-// Initialize Gemini API client lazily
-let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI | null {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== "MY_GEMINI_API_KEY") {
-      aiClient = new GoogleGenAI({ apiKey });
-    }
+// =====================================================================
+// Groq API client (OpenAI-compatible REST)
+// =====================================================================
+// Groq exposes an OpenAI-compatible /v1/chat/completions endpoint.
+// We use plain fetch() so no extra SDK dependency is required.
+// Default model: llama-3.3-70b-versatile (fast, capable, Indonesian OK).
+//
+// Server-side key is injected via GROQ_API_KEY env var. Clients may
+// also pass `apiKey` in the request body to override (legacy support).
+
+const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile";
+
+interface GroqMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+async function callGroq(
+  messages: GroqMessage[],
+  options: {
+    apiKey?: string;
+    model?: string;
+    temperature?: number;
+    jsonMode?: boolean;
+    maxTokens?: number;
+  } = {}
+): Promise<string> {
+  const apiKey = (options.apiKey || process.env.GROQ_API_KEY || "").trim();
+  if (!apiKey) {
+    throw new Error("GROQ_API_KEY belum dikonfigurasi di server.");
   }
-  return aiClient;
+
+  const body: Record<string, unknown> = {
+    model: options.model || GROQ_DEFAULT_MODEL,
+    messages,
+    temperature: options.temperature ?? 0.7,
+  };
+  if (options.maxTokens) body.max_tokens = options.maxTokens;
+  if (options.jsonMode) body.response_format = { type: "json_object" };
+
+  const response = await fetch(GROQ_API_URL, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => "");
+    let errMessage = `Groq API ${response.status} ${response.statusText}`;
+    try {
+      const errJson = JSON.parse(errText);
+      if (errJson?.error?.message) errMessage = errJson.error.message;
+    } catch {
+      if (errText) errMessage += ` — ${errText.slice(0, 300)}`;
+    }
+    throw new Error(errMessage);
+  }
+
+  const data: any = await response.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Groq returned empty response");
+  return text as string;
 }
 
 // V2 to V3 City ID Map and resolver
@@ -339,12 +394,47 @@ function registerRoutes(app: express.Application) {
              if (reminder.days && Array.isArray(reminder.days) && !reminder.days.includes(day)) {
                continue;
              }
-             
+
+             // Custom, more meaningful messages for Dhuha & Tahajud
+             let title = `Waktunya ${reminder.name}!`;
+             let body = `Saatnya menunaikan kegiatan ibadah rutin Anda: ${reminder.name}.`;
+             let extra: Record<string, any> = {};
+
+             if (key === "dhuha") {
+               title = "🌅 Waktu Shalat Dhuha";
+               body = "Saatnya shalat Dhuha, minimal 2 rakaat. 'Setiap pagi, setiap ruas jasad setiap manusia wajib bersedekah.' (HR. Muslim)";
+               extra.isAdhan = false;
+               extra.prayerName = "Dhuha";
+               extra.requireInteraction = false;
+             } else if (key === "tahajud") {
+               title = "🌙 Waktu Bangun untuk Tahajud";
+               body = "Bangunlah, ambil wudhu, lalu shalat Tahajud. 'Shalat malam itu sebaik-baik shalat sunnah setelah shalat fardhu.' (HR. Muslim)";
+               extra.isAdhan = false;
+               extra.prayerName = "Tahajud";
+               extra.requireInteraction = false;
+             } else if (key === "dzikirPagi") {
+               title = "🌅 Waktunya Dzikir Pagi";
+               body = "Mari awali pagi dengan dzikir & wirid. 'Mereka yang berdzikir kepada Allah sambil berdiri, duduk, atau berbaring...' (QS. Ali Imran: 191)";
+             } else if (key === "dzikirPetang") {
+               title = "🌆 Waktunya Dzikir Petang";
+               body = "Mari tutup sore dengan dzikir & wirid sebelum malam tiba.";
+             } else if (key === "bacaQuran") {
+               title = "📖 Waktunya Tadarus Al-Qur'an";
+               body = "Jadwalkan waktu khusus membaca Al-Qur'an malam ini. 'Bacalah Al-Qur'an, sesungguhnya ia akan datang pada hari kiamat sebagai pemberi syafaat.' (HR. Muslim)";
+             } else if (key === "terbit") {
+               title = "🌄 Matahari Telah Terbit";
+               body = "Sudah masuk waktu syuruq. Dhuha dianjurkan ~15 menit setelah syuruq.";
+             } else if (key === "puasaSeninKamis") {
+               title = "🍽️ Waktu Sahur (Puasa Senin-Kamis)";
+               body = "Mari sahur untuk puasa sunnah hari ini. 'Amal-amal itu diserahkan kepada Allah pada hari Senin dan Kamis.' (HR. Tirmidzi)";
+             }
+
              webpush.sendNotification(sub, JSON.stringify({
-                title: `Waktunya ${reminder.name}!`,
-                body: `Saatnya menunaikan kegiatan ibadah rutin Anda: ${reminder.name}.`,
+                title,
+                body,
                 icon: "/icons/icon-192x192.png",
-                tag: `rutin-${key}`
+                tag: `rutin-${key}`,
+                ...extra,
              })).catch(async err => {
                 if (err.statusCode === 410 || err.statusCode === 404) {
                    await removeSubscription(endpoint);
@@ -423,13 +513,17 @@ function registerRoutes(app: express.Application) {
   // Use Vercel Cron Jobs (see vercel.json) to hit /api/push/trigger-cron
   // every minute, or call this endpoint manually.
   if (process.env.ENABLE_NODE_CRON === "true") {
-    // Loaded lazily to avoid bundling node-cron into the serverless function.
-    import("node-cron").then(({ default: cron }) => {
+    // Loaded lazily via dynamic require so the node-cron package is
+    // only imported when explicitly enabled (it's not in package.json
+    // deps by default). Cast to any to avoid TS errors when the dep
+    // is absent.
+    try {
+      const cron = (eval('require') as (m: string) => any)("node-cron");
       cron.schedule("* * * * *", runCronJobs);
       console.log("[Mushola Nur Hidayah] node-cron scheduler enabled");
-    }).catch(() => {
+    } catch (e) {
       console.warn("[Mushola Nur Hidayah] node-cron not available, skipping");
-    });
+    }
   }
 
   app.get("/api/push/trigger-cron", async (req, res) => {
@@ -684,22 +778,18 @@ function registerRoutes(app: express.Application) {
     }
   });
 
-  // API Route - Generate Khutbah
+  // API Route - Generate Khutbah (Groq)
   app.post("/api/generate-khutbah", async (req, res) => {
     try {
       const { tema, judul, apiKey, tanyaUstadzContext } = req.body;
-      let client = getGeminiClient();
-      
-      if (apiKey && apiKey.trim() !== "") {
-        try {
-          client = new GoogleGenAI({ apiKey: apiKey.trim() });
-        } catch (e) {
-          // Fall back to deafult
-        }
-      }
 
-      if (!client) {
-        return res.status(401).json({ error: "API Key diperlukan. Silakan atur di Pengaturan." });
+      // Determine which key to use — server-side GROQ_API_KEY takes
+      // priority; client-supplied apiKey is a fallback.
+      const effectiveKey = (process.env.GROQ_API_KEY || apiKey || "").trim();
+      if (!effectiveKey) {
+        return res.status(401).json({
+          error: "GROQ_API_KEY belum dikonfigurasi di server. Tambahkan key di Vercel Project Settings > Environment Variables.",
+        });
       }
 
       const promptText = `
@@ -731,59 +821,65 @@ Untuk "content", struktur block yang diijinkan adalah:
 PENTING:
 - Di dalam array "content", HARUS memuat minimal 2-3 dalil (Quran/Hadis).
 - Di akhir array "content", SELALU letakkan block "doa" yang berisi doa merenung/intropeksi berbahasa Indonesia untuk menutup khutbah pertama sebelum duduk di antara dua khutbah.
-- Kembalikan HANYA JSON. Jangan gunakan markdown block (\`\`\`json).`;
+- Kembalikan HANYA JSON valid. Jangan gunakan markdown block (\`\`\`json).`;
 
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: promptText,
-        config: {
-          responseMimeType: "application/json",
+      const responseText = await callGroq(
+        [
+          {
+            role: "system",
+            content: "Anda adalah asisten AI yang ahli dalam penyusunan naskah Khutbah Jumat Islami. Selalu kembalikan output sebagai JSON valid sesuai struktur yang diminta, tanpa pembungkus markdown.",
+          },
+          { role: "user", content: promptText },
+        ],
+        {
+          apiKey: effectiveKey,
           temperature: 0.7,
+          jsonMode: true,
+          maxTokens: 8000,
         }
-      });
+      );
 
-      const responseText = response.text;
       if (!responseText) {
-        throw new Error("Empty response from AI");
+        throw new Error("Empty response from Groq");
       }
 
-      // the response is guaranteed to be JSON string due to responseMimeType
-      let parsedKhutbah;
+      let parsedKhutbah: any;
       try {
         parsedKhutbah = JSON.parse(responseText);
       } catch (err) {
-        throw new Error("Gagal mengurai format JSON dari AI.");
+        // Try to extract JSON from possible markdown wrappers
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsedKhutbah = JSON.parse(jsonMatch[0]);
+          } catch {
+            throw new Error("Gagal mengurai format JSON dari AI. Raw: " + responseText.slice(0, 300));
+          }
+        } else {
+          throw new Error("Gagal mengurai format JSON dari AI. Raw: " + responseText.slice(0, 300));
+        }
       }
 
-      // Pastikan ada ID dan property lain
       parsedKhutbah.id = Date.now();
-      
+      parsedKhutbah.provider = "groq";
       res.json(parsedKhutbah);
     } catch (error: any) {
-      console.error("AI Error:", error);
+      console.error("[generate-khutbah] AI Error:", error);
       res.status(500).json({ error: error.message || "Terjadi kesalahan saat membuat khutbah." });
     }
   });
 
-  // API Route - Ask AI Scholar about verse or spiritual guidance
+  // API Route - Ask AI Scholar about verse or spiritual guidance (Groq)
   app.post("/api/ask-ai", async (req, res) => {
     try {
       const { prompt, verseText, context, apiKey } = req.body;
-      let client = getGeminiClient();
-      
-      if (apiKey && apiKey.trim() !== "") {
-        try {
-          client = new GoogleGenAI({ apiKey: apiKey.trim() });
-        } catch (e) {
-          console.error("Failed to initialize Google Gen AI with custom key", e);
-        }
-      }
+      const effectiveKey = (process.env.GROQ_API_KEY || apiKey || "").trim();
 
-      if (!client) {
+      if (!effectiveKey) {
         return res.status(403).json({
           status: false,
-          message: "Gemini API Key belum ditentukan. Harap tambahkan API Key secara mandiri melalui menu Pengaturan Profil.",
-          isConfigured: false
+          message: "GROQ_API_KEY belum dikonfigurasi di server. Tambahkan key di Vercel Project Settings > Environment Variables.",
+          isConfigured: false,
         });
       }
 
@@ -797,48 +893,58 @@ ${prompt}
 Tolong jawab pertanyaan ini dengan hikmah, berikan referensi spesifik dari Al-Qur'an maupun sabda Rasulullah (Hadits) yang relevan secara tegas beserta porsi teks asli dan maknanya agar menguatkan keimanan. Pastikan mencantumkan nama Surah dan nomor ayat (misal: QS. Al-Baqarah: 255) atau perawi Hadits (misal: HR. Bukhari).
 `;
 
+      const systemInstruction =
+        "Anda adalah asisten AI 'Tanya Ustadz AI' di dalam aplikasi 'Mushola Nur Hidayah'. Anda adalah seorang Ulama Mufassir yang sangat berpengetahuan tentang Al-Qur'an, asbabun nuzul, serta ilmu Hadits. Tugas Anda adalah: memberikan jawaban Islami secara komprehensif yang WAJIB merujuk pada ayat-ayat suci Al-Qur'an dan juga menyertakan riwayat Hadits yang selaras (Kutubus Sittah) dalam menjawab isu umat. Di setiap jawaban yang melibatkan saran, doa, atau dalil, berikan kutipan bahasa Arab, terjemahan Indonesia, serta referensi letaknya (contoh: QS. Al-Baqarah: 120 atau HR. Bukhari). Formatlah teks menggunakan Markdown dengan rapi.";
+
       let retries = 2;
-      let finalResponse = null;
-      let lastError = null;
+      let finalResponse: string | null = null;
+      let lastError: any = null;
 
       while (retries > 0) {
         try {
-          finalResponse = await client.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: queryPrompt,
-            config: {
-              systemInstruction: "Anda adalah asisten AI 'Tanya Ustadz AI' di dalam aplikasi 'Quran Saku'. Anda adalah seorang Ulama Mufassir yang sangat berpengetahuan tentang Al-Qur'an, asbabun nuzul, serta ilmu Hadits. Tugas Anda adalah: memberikan jawaban Islami secara komprehensif yang WAJIB merujuk pada ayat-ayat suci Al-Qur'an dan juga menyertakan riwayat Hadits yang selaras (Kutubus Sittah) dalam menjawab isu umat. Di setiap jawaban yang melibatkan saran, doa, atau dalil, berikan kutipan bahasa Arab, terjemahan Indonesia, serta referensi letaknya (contoh: QS. Al-Baqarah: 120 atau HR. Bukhari). Formatlah teks menggunakan Markdown dengan rapi."
+          finalResponse = await callGroq(
+            [
+              { role: "system", content: systemInstruction },
+              { role: "user", content: queryPrompt },
+            ],
+            {
+              apiKey: effectiveKey,
+              temperature: 0.7,
+              maxTokens: 4000,
             }
-          });
+          );
           break; // Success, exit loop
         } catch (error: any) {
           lastError = error;
-          if (error.message?.includes("503") || error.message?.includes("high demand")) {
+          const msg = (error?.message || "").toLowerCase();
+          // Retry on transient Groq errors (529 = overloaded, 503, rate-limit)
+          if (msg.includes("529") || msg.includes("503") || msg.includes("overloaded") || msg.includes("rate limit")) {
             retries--;
             if (retries > 0) {
-              console.log("503 High Demand hit. Retrying in 1.5 seconds...");
-              await new Promise(res => setTimeout(res, 1500));
+              console.log("[ask-ai] Groq transient error. Retrying in 1.5s...", error?.message);
+              await new Promise((r) => setTimeout(r, 1500));
             }
           } else {
-            throw error; // If it's a different error, throw immediately
+            throw error;
           }
         }
       }
 
       if (!finalResponse && lastError) {
-        throw lastError; // If all retries failed
+        throw lastError;
       }
 
       res.json({
         status: true,
-        answer: finalResponse?.text || "",
-        isConfigured: true
+        answer: finalResponse || "",
+        isConfigured: true,
+        provider: "groq",
       });
     } catch (error: any) {
-      console.error("AI Error:", error);
+      console.error("[ask-ai] AI Error:", error);
       let errorMsg = error.message;
-      if (errorMsg?.includes("high demand") || errorMsg?.includes("503")) {
-        errorMsg = "Server Google Gemini saat ini sedang sibuk dan mengalami permintaan tinggi (503). Mohon coba beberapa saat lagi.";
+      if (errorMsg?.includes("529") || errorMsg?.includes("overloaded")) {
+        errorMsg = "Server Groq saat ini sedang sibuk (overloaded). Mohon coba beberapa saat lagi.";
       }
       res.status(500).json({ status: false, message: errorMsg });
     }

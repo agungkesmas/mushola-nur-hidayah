@@ -81,12 +81,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const saved = localStorage.getItem("qd_rutinReminders");
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Ensure new additions are present if using old schema
+        // Ensure new additions are present if using old schema.
+        // Note: tahajud & dhuha are enabled by default for new users.
         const defaultSchema: any = {
-          tahajud: { enable: false, time: "03:30", name: "Shalat Tahajud" },
+          tahajud: { enable: true, time: "03:30", name: "Shalat Tahajud" },
           puasaSeninKamis: { enable: false, time: "03:30", name: "Sahur Puasa Senin-Kamis", days: [1, 4] },
           terbit: { enable: false, time: "05:50", name: "Syuruq / Terbit" },
-          dhuha: { enable: false, time: "07:00", name: "Shalat Dhuha" },
+          dhuha: { enable: true, time: "07:00", name: "Shalat Dhuha" },
           dzikirPagi: { enable: false, time: "06:00", name: "Dzikir Pagi" },
           dzikirPetang: { enable: false, time: "16:00", name: "Dzikir Petang" },
           bacaQuran: { enable: false, time: "20:00", name: "Tadarus Al-Qur'an" },
@@ -95,10 +96,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       }
     } catch (e) {}
     return {
-      tahajud: { enable: false, time: "03:30", name: "Shalat Tahajud" },
+      tahajud: { enable: true, time: "03:30", name: "Shalat Tahajud" },
       puasaSeninKamis: { enable: false, time: "03:30", name: "Sahur Puasa Senin-Kamis", days: [1, 4] },
       terbit: { enable: false, time: "05:50", name: "Syuruq / Terbit" },
-      dhuha: { enable: false, time: "07:00", name: "Shalat Dhuha" },
+      dhuha: { enable: true, time: "07:00", name: "Shalat Dhuha" },
       dzikirPagi: { enable: false, time: "06:00", name: "Dzikir Pagi" },
       dzikirPetang: { enable: false, time: "16:00", name: "Dzikir Petang" },
       bacaQuran: { enable: false, time: "20:00", name: "Tadarus Al-Qur'an" },
@@ -411,10 +412,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </span>
             </div>
 
-            {/* Editing Gemini API Key field */}
+            {/* Editing Groq API Key field (optional — server already has one) */}
             <div className="flex flex-col gap-2.5">
               <label className="text-[11px] font-bold text-slate-400 tracking-widest uppercase flex items-center gap-2">
-                GEMINI API KEY
+                GROQ API KEY
                 <span className="text-[#ECC17A] bg-[#0F4C3A] px-2 py-0.5 rounded-full text-[9px] shadow-sm">
                   OPSIONAL
                 </span>
@@ -423,19 +424,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="password"
                 value={editingGeminiKey}
                 onChange={(e) => setEditingGeminiKey(e.target.value)}
-                placeholder="Masukkan Gemini API Key..."
+                placeholder="Kosongkan untuk pakai key server..."
                 className="w-full bg-[#FDFBF7] border border-slate-200/80 rounded-2xl px-5 py-3.5 text-sm sm:text-[15px] text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0F4C3A]/20 focus:border-[#0F4C3A] font-mono transition-all shadow-sm"
               />
               <span className="text-[11px] text-slate-500 font-medium block leading-relaxed mt-1">
-                Digunakan untuk fitur Tanya Ustadz AI. Disimpan di lokal secara
-                aman. Dapatkan gratis di{" "}
+                Server sudah memiliki GROQ_API_KEY yang otomatis dipakai untuk
+                fitur Tanya Ustadz AI &amp; Khutbah Jumat. Field ini hanya perlu
+                diisi jika Anda ingin override dengan key pribadi. Dapatkan key
+                gratis di{" "}
                 <a
-                  href="https://aistudio.google.com/app/apikey"
+                  href="https://console.groq.com/keys"
                   target="_blank"
                   rel="noreferrer"
                   className="text-blue-600 hover:text-blue-800 underline font-semibold transition-colors"
                 >
-                  Google AI Studio
+                  Groq Console
                 </a>
                 .
               </span>

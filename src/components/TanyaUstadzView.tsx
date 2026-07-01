@@ -268,55 +268,35 @@ export const TanyaUstadzView: React.FC<TanyaUstadzViewProps> = ({
     try {
       let aiText = "";
 
-      if (geminiApiKey && geminiApiKey.trim() !== "") {
-        const sysInstruct =
-          "Anda adalah asisten AI 'Tanya Ustadz AI' di aplikasi 'Mushola Nur Hidayah'. Anda adalah Ulama Mufassir yang sangat berpengetahuan tentang Al-Qur'an, asbabun nuzul, dan ilmu Hadits. Tugas Anda: memberikan jawaban Islami komprehensif yang WAJIB merujuk pada ayat suci Al-Qur'an dan riwayat Hadits (Kutubus Sittah). Saat mengutip ayat atau hadits, tuliskan langsung teks Arabnya tanpa menambahkan embel-embel label seperti 'Arab:' atau 'Teks Arab:'. Langsung saja tulis ayatnya, berikan terjemahan, dan referensinya secara natural (contoh: QS. Al-Baqarah: 120 atau HR. Bukhari). Formatlah menggunakan Markdown yang rapi.";
+      // All AI requests now go through the backend /api/ask-ai endpoint.
+      // The GROQ_API_KEY is injected server-side (Vercel env var), so the
+      // client no longer needs to supply or know about the key.
+      //
+      // If the user has set a custom API key in Settings (legacy), we
+      // still pass it as `apiKey` so they can override the server default.
+      const response = await fetch("/api/ask-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: textToSend,
+          apiKey: geminiApiKey && geminiApiKey.trim() !== "" ? geminiApiKey.trim() : undefined,
+        }),
+      });
 
-        const qp = `Pertanyaan Pengguna:\n${textToSend}\n\nTolong jawab pertanyaan ini dengan hikmah, berikan referensi spesifik dari Al-Qur'an maupun sabda Rasulullah (Hadits) yang relevan secara tegas beserta porsi teks asli dan maknanya agar menguatkan keimanan.`;
-
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey.trim()}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: sysInstruct }] },
-              contents: [{ role: "user", parts: [{ text: qp }] }],
-            }),
-          }
+      const contentType = response.headers.get("content-type");
+      if (!contentType || contentType.indexOf("application/json") === -1) {
+        throw new Error(
+          "Backend AI tidak merespon JSON. Pastikan deployment Vercel aktif dan GROQ_API_KEY sudah dikonfigurasi di Project Settings."
         );
+      }
 
-        if (!response.ok)
-          throw new Error(
-            `Google API: ${response.status} ${response.statusText}`
-          );
-        const payload = await response.json();
-
-        aiText =
-          payload.candidates?.[0]?.content?.parts?.[0]?.text ||
-          "Maaf, Ustadz AI tidak dapat menemukan jawaban referensi.";
+      const payload = await response.json();
+      if (response.ok && payload.status && payload.answer) {
+        aiText = payload.answer;
       } else {
-        const response = await fetch("/api/ask-ai", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: textToSend }),
-        });
-
-        const contentType = response.headers.get("content-type");
-        if (!contentType || contentType.indexOf("application/json") === -1) {
-          throw new Error(
-            "API backend Express tidak ditemukan (Ini wajar jika Anda mendeploy di Vercel Static, karena Vercel bukan server Express). Solusi: Cukup tambahkan Kunci API Gemini Anda di menu Pengaturan Profil untuk langsung menggunakan koneksi tanpa server (Serverless)."
-          );
-        }
-
-        const payload = await response.json();
-        if (payload.status && payload.answer) {
-          aiText = payload.answer;
-        } else {
-          throw new Error(
-            payload.message || "Gagal berkomunikasi dengan asisten AI."
-          );
-        }
+        throw new Error(
+          payload.message || payload.error || "Gagal berkomunikasi dengan asisten AI."
+        );
       }
 
       setMessages((prev) => [
@@ -329,10 +309,14 @@ export const TanyaUstadzView: React.FC<TanyaUstadzViewProps> = ({
       ]);
     } catch (err: any) {
       console.error(err);
-      
-      const isOverloaded = err.message?.includes("high demand") || err.message?.includes("503");
+
+      const isOverloaded =
+        err.message?.includes("high demand") ||
+        err.message?.includes("503") ||
+        err.message?.includes("529") ||
+        err.message?.includes("overloaded");
       const errorMsg = isOverloaded
-        ? "**Ustadz AI Sedang Sibuk:**\nMaaf, sistem AI Ustadz saat ini sedang mengalami lonjakan antrean. Mohon tunggu beberapa menit lalu coba tanyakan kembali ya. Insya Allah segera membaik. (Status: 503 Server Sibuk)"
+        ? "**Ustadz AI Sedang Sibuk:**\nMaaf, server AI (Groq) saat ini sedang mengalami lonjakan antrean. Mohon tunggu beberapa menit lalu coba tanyakan kembali ya. Insya Allah segera membaik."
         : `**Maaf, saya mengalami kendala interaksi:** ${err.message}`;
 
       setMessages((prev) => [
@@ -345,7 +329,7 @@ export const TanyaUstadzView: React.FC<TanyaUstadzViewProps> = ({
       ]);
       addToast(
         "AI Sedang Sibuk",
-        isOverloaded ? "Server sedang padat, silakan coba lagi." : "Harap periksa pengaturan pengaturan.",
+        isOverloaded ? "Server sedang padat, silakan coba lagi." : "Harap periksa pengaturan.",
         "warning"
       );
     } finally {
@@ -807,7 +791,7 @@ export const TanyaUstadzView: React.FC<TanyaUstadzViewProps> = ({
                 Tanya Ustadz AI
               </h3>
               <p className="text-[10px] text-teal-100/90 font-medium leading-normal line-clamp-1">
-                Tanya dalil, ayat, & hadits (Gemini 2.5 Flash)
+                Tanya dalil, ayat, & hadits (Groq AI)
               </p>
             </div>
           </div>
