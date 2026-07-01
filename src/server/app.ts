@@ -42,43 +42,24 @@ function resolveCityId(id: string): string {
 }
 
 let vapidKeys: { publicKey: string; privateKey: string } | null = null;
-let db: any = null;
 
 async function setupSystem() {
-  // Firebase is optional. If the config file is missing or invalid,
-  // we silently fall back to local VAPID key generation. This makes
-  // the app safe to deploy on Vercel without Firebase credentials.
-  try {
-    if (fs.existsSync("firebase-applet-config.json")) {
-      const config = JSON.parse(fs.readFileSync("firebase-applet-config.json", "utf8"));
-      // Only attempt Firebase init if the config has the required fields.
-      if (config && config.projectId && config.apiKey) {
-        const app = initializeApp(config);
-        db = getFirestore(app, config.firestoreDatabaseId);
-        console.log("[setupSystem] Firebase initialized for server subscriptions");
-
-        try {
-          const vDoc = await getDoc(doc(db, "systemConfig", "vapidKeys"));
-          if (vDoc.exists()) {
-            vapidKeys = vDoc.data() as { publicKey: string; privateKey: string };
-            console.log("[setupSystem] Loaded VAPID keys from Firestore");
-          } else {
-            vapidKeys = webpush.generateVAPIDKeys();
-            await setDoc(doc(db, "systemConfig", "vapidKeys"), vapidKeys);
-            console.log("[setupSystem] Generated and saved new VAPID keys to Firestore");
-          }
-        } catch (e) {
-          console.warn("[setupSystem] Firestore VAPID key lookup failed, using fallback:", (e as Error)?.message);
-        }
-      } else {
-        console.warn("[setupSystem] firebase-applet-config.json missing required fields, skipping Firebase");
+  // Try to load VAPID keys from Supabase (system_config table).
+  // Falls back to local vapid.json or ephemeral in-memory keys.
+  const sb = getSupabase();
+  if (sb) {
+    try {
+      const { data, error } = await sb.from("system_config").select("value").eq("key", "vapidKeys").maybeSingle();
+      if (!error && data?.value) {
+        vapidKeys = data.value as { publicKey: string; privateKey: string };
+        console.log("[setupSystem] Loaded VAPID keys from Supabase system_config");
       }
+    } catch (e) {
+      console.warn("[setupSystem] Supabase VAPID key lookup failed:", (e as Error)?.message);
     }
-  } catch (e) {
-    console.warn("[setupSystem] Firebase init skipped:", (e as Error)?.message);
   }
 
-  // Fallback if no firebase / no VAPID keys loaded
+  // Fallback: generate or load from local file
   if (!vapidKeys) {
     try {
       // On Vercel serverless, the filesystem is read-only — we cannot
@@ -94,6 +75,20 @@ async function setupSystem() {
           fs.writeFileSync("vapid.json", JSON.stringify(vapidKeys));
         } catch (writeErr) {
           console.warn("[setupSystem] Could not persist vapid.json:", (writeErr as Error)?.message);
+        }
+      }
+
+      // Persist the freshly generated keys to Supabase for reuse
+      if (sb && vapidKeys) {
+        try {
+          await sb.from("system_config").upsert({
+            key: "vapidKeys",
+            value: vapidKeys,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "key" });
+          console.log("[setupSystem] Persisted new VAPID keys to Supabase system_config");
+        } catch (e) {
+          console.warn("[setupSystem] Could not persist VAPID keys to Supabase:", (e as Error)?.message);
         }
       }
     } catch (e) {
@@ -120,52 +115,100 @@ async function setupSystem() {
 }
 
 // ============================================
-// FIREBASE FIRESTORE FOR SUBSCRIPTIONS
+// SUPABASE FOR SUBSCRIPTIONS (replaces Firebase Firestore)
 // ============================================
-import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, getDoc } from "firebase/firestore";
+// We use Supabase for persistent storage of push subscriptions and
+// system config (VAPID keys). The client is created lazily so that
+// missing credentials don't crash the function at module load time.
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+
+let supabaseClient: SupabaseClient | null = null;
+function getSupabase(): SupabaseClient | null {
+  if (supabaseClient) return supabaseClient;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !key) {
+    console.warn("[supabase] SUPABASE_URL or SUPABASE_*_KEY not set, running in memory-only mode");
+    return null;
+  }
+  try {
+    supabaseClient = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    return supabaseClient;
+  } catch (e) {
+    console.warn("[supabase] Failed to init Supabase client:", (e as Error)?.message);
+    return null;
+  }
+}
 
 // In-Memory map just as a fallback or cache
 let subscriptions: Record<string, any> = {};
 
-// We will fetch subscriptions dynamically from Firestore when running the cron.
+function endpointToId(endpoint: string): string {
+  return Buffer.from(endpoint).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// We will fetch subscriptions dynamically from Supabase when running the cron.
 async function getAllSubscriptions() {
-  if (!db) return subscriptions; // fallback
+  const sb = getSupabase();
+  if (!sb) return subscriptions; // fallback
   try {
-    const snap = await getDocs(collection(db, "pushSubscriptions"));
+    const { data, error } = await sb.from("push_subscriptions").select("id, subscription, city_id, selected_city, sholat_schedule, rutin_reminders, timezone");
+    if (error) throw error;
     const subs: Record<string, any> = {};
-    snap.forEach(d => {
-      subs[d.id] = d.data();
-    });
+    for (const row of data || []) {
+      // Reconstruct the same shape Firestore used to return
+      subs[row.subscription?.endpoint || row.id] = {
+        subscription: row.subscription,
+        cityId: row.city_id,
+        selectedCity: row.selected_city,
+        sholatSchedule: row.sholat_schedule,
+        rutinReminders: row.rutin_reminders,
+        timezone: row.timezone,
+      };
+    }
     return subs;
   } catch (e) {
-    console.error("Error fetching subscriptions:", e);
+    console.warn("[supabase] Error fetching subscriptions:", (e as Error)?.message);
     return subscriptions; // fallback
   }
 }
 
 async function saveSubscription(endpoint: string, data: any) {
   subscriptions[endpoint] = data; // update local instantly
-  if (db) {
-    try {
-      // Use a hashed endpoint or just an encoded url as ID
-      const safeId = Buffer.from(endpoint).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      await setDoc(doc(db, "pushSubscriptions", safeId), data);
-    } catch (e) {
-      console.error("Error saving subscription:", e);
-    }
+  const sb = getSupabase();
+  if (!sb) return;
+  try {
+    const safeId = endpointToId(endpoint);
+    const row = {
+      id: safeId,
+      endpoint,
+      subscription: data.subscription,
+      city_id: data.cityId || null,
+      selected_city: data.selectedCity || null,
+      sholat_schedule: data.sholatSchedule || null,
+      rutin_reminders: data.rutinReminders || {},
+      timezone: data.timezone || "Asia/Jakarta",
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await sb.from("push_subscriptions").upsert(row, { onConflict: "id" });
+    if (error) throw error;
+  } catch (e) {
+    console.warn("[supabase] Error saving subscription:", (e as Error)?.message);
   }
 }
 
 async function removeSubscription(endpoint: string) {
   delete subscriptions[endpoint];
-  if (db) {
-    try {
-      const safeId = Buffer.from(endpoint).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      await deleteDoc(doc(db, "pushSubscriptions", safeId));
-    } catch (e) {
-      console.error("Error removing subscription:", e);
-    }
+  const sb = getSupabase();
+  if (!sb) return;
+  try {
+    const safeId = endpointToId(endpoint);
+    const { error } = await sb.from("push_subscriptions").delete().eq("id", safeId);
+    if (error) throw error;
+  } catch (e) {
+    console.warn("[supabase] Error removing subscription:", (e as Error)?.message);
   }
 }
 // ------------------------
