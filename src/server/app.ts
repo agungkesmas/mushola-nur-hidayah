@@ -225,10 +225,21 @@ export async function getApp(): Promise<express.Application> {
   if (_app) return _app;
   if (!_initPromise) {
     _initPromise = (async () => {
-      await setupSystem();
+      try {
+        await setupSystem();
+      } catch (e) {
+        // setupSystem failures must not crash the whole function —
+        // the API can still respond (push notifications may be degraded)
+        console.error("[getApp] setupSystem failed (non-fatal):", (e as Error)?.message);
+      }
       const app = express();
       app.use(express.json());
-      registerRoutes(app);
+      try {
+        registerRoutes(app);
+      } catch (e) {
+        console.error("[getApp] registerRoutes failed:", (e as Error)?.message);
+        throw e;
+      }
       _app = app;
       return app;
     })();
